@@ -60,11 +60,8 @@ def print_props(schema, components)
   req = []
   schema[:required].each { |r| req.push(r)} if schema[:required]
 
-  if schema[:properties]
-    print_prop_table(schema[:properties], type, req)
-  else
-    warn "INGEN PROPS"
-  end
+  print_prop_table(schema[:properties], type, req) if schema[:properties]
+
   if schema[:additionalProperties]
     puts "Additional propererties with a value in" \
          " #{schema[:additionalProperties][:format]} format."
@@ -220,10 +217,7 @@ tags.each do |id, info|
   print "== #{id}\n\n"
   print_description(info[:description])
   info[:paths].each do |n,v|
-    warn v.size
-    v.each do |api|
-      print_api(n.to_s, api, components)
-    end
+    v.each { |api| print_api(n.to_s, api, components) }
   end
   puts
 end
