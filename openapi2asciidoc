@@ -1,0 +1,229 @@
+#!/usr/bin/ruby
+
+require 'json'
+require 'yaml'
+
+def print_description(text)
+  print("#{text}#{text[-1].match(/[[:punct:]]/) ? '' : "."}\n\n")
+end
+
+def print_prop_table(properties, type, req)
+  puts "[cols=\"2,2,2,^1,10\"]\n" \
+       "|===\n" \
+       "|Name | Type | Format | Req'd | Description\n" \
+       "\n"
+  properties.each do |name, props|
+    desc = props[:description]
+    if !desc && props[:enum]
+      desc = "Enum: #{props[:enum].join(", ")}"
+    end
+
+    puts "| #{name} | #{props[:type]} | #{props[:format]}" \
+         " | #{req.include?(name.to_s) ? '✓' : ''}" \
+         " | #{desc}"
+  end
+  print "|===\n\n"
+
+  example = {}
+  properties.each do |name, props|
+    if props[:example]
+      example[name] = props[:example]
+    elsif props[:type]
+      if props[:enum]
+        example[name] = props[:enum].first
+      else
+        example[name] = props[:type]
+      end
+    else
+      example[name] = "string"
+    end
+  end
+  example = [example] if type == "array"
+  puts "Example\n" \
+       "[source,json]\n----"
+  puts JSON.pretty_generate(example)
+  print "----\n\n"
+end
+
+def print_props(schema, components)
+  if (r = schema[:'$ref'])
+    schema = components[:schemas][r.sub('#/components/schemas/', '').to_sym]
+  end
+  type = schema[:type]
+  if schema[:items]
+    schema = schema[:items]
+    if (r = schema[:'$ref'])
+      schema = components[:schemas][r.sub('#/components/schemas/', '').to_sym]
+    end
+  end
+  #warn schema
+  req = []
+  schema[:required].each { |r| req.push(r)} if schema[:required]
+
+  if schema[:properties]
+    print_prop_table(schema[:properties], type, req)
+  else
+    warn "INGEN PROPS"
+  end
+  if schema[:additionalProperties]
+    puts "Additional propererties with a value in" \
+         " #{schema[:additionalProperties][:format]} format."
+  end
+end
+
+def print_api(path, info, components)
+  print "=== #{info[:op].upcase} #{path}\n\n"
+
+  if info[:description]
+    desc = info[:description]
+    desc.each_line { |l| puts l.strip }
+    puts
+
+    consume = info[:requestBody]
+    if consume && consume[:content]
+      print "==== Consumes\n\n"
+      print "This API call consumes the following media types via the" \
+            " Content-Type request header:\n\n"
+      consume[:content].each { |k,v| puts "* #{k}" }
+      puts
+
+      schema = consume.dig(:content, :"application/json", :schema)
+      if schema && !schema.empty?
+        print "==== Request Body" \
+              " (#{consume[:required] ? 'required' : 'optional'})\n\n"
+        print_props(schema, components)
+      elsif (example = consume.dig(:content, :"text/plain", :example))
+        print "==== Request Body" \
+              " (#{consume[:required] ? 'required' : 'optional'})\n\n"
+        print "Example\n\n" \
+              "----\n" \
+              "#{example}\n" \
+              "----\n\n"
+      end
+    end
+
+    params = info[:parameters]
+    if params && !params.empty?
+      print "==== Parameters\n\n"
+      puts "[cols=\"2,2,2,2,1,10\"]\n" \
+           "|===\n" \
+           "|Name | Type | Format | In | Req'd | Description\n" \
+           "\n"
+      params.each do |param|
+        desc = param[:description]
+        desc = param.dig(:scema, :description) if !desc
+
+        puts "| #{param[:name]} | #{param.dig(:schema, :type)}" \
+             " | #{param.dig(:schema, :format)}" \
+             " | #{param[:in]}" \
+             " | #{param[:required] ? '✓' : ''}" \
+             " | #{param[:description]}"
+      end
+      print "|===\n\n"
+    end
+
+    resp = info[:responses]
+    if resp && !resp.empty?
+      print "==== Responses\n\n"
+      resp.each do |code, r|
+        puts "===== #{code}"
+        print_description(r[:description]) if r[:description]
+        schema =  r.dig(:content, :"application/json", :schema)
+        if schema #&& schema[:type]
+          print "The return type is #{schema[:type]}, and the following" \
+                " parameters may be returned:\n\n"
+          print_props(schema, components)
+        end
+      end
+      puts
+    end
+  end
+end
+
+json = nil
+if ARGV[0].match(".ya?ml")
+  keys2sym = ->(h) do
+    h.transform_keys!(&:to_sym) if h.respond_to?(:transform_keys!)
+    h.each { |v| keys2sym.call(v) } if h.respond_to?(:each)
+  end
+  json = keys2sym.call(YAML.load_file(ARGV[0], permitted_classes: [Time]))
+else
+  json = JSON.parse(File.read(ARGV[0]), symbolize_names: true)
+end
+
+info = json[:info]
+raise 'Missing "info" field' if !info
+
+title = info[:title]
+name = info.dig(:contact, :name)
+email = info.dig(:contact, :email)
+description = info[:description]
+version = info[:version]
+paths = json[:paths]
+components = json[:components]
+raise 'Missing "info"/"title" field' if !title
+raise 'Missing "paths" field' if !paths
+
+tags = {nil => {description: "Default", paths: {}}}
+if json[:tags]
+  json[:tags].each do |tag|
+    [:name, :description].each do |k|
+      raise 'Missing #{k} in "tags"' if !tag[k]
+    end
+    n = tag.delete(:name)
+    tag[:paths] = {}
+    tags[n] = tag
+  end
+end
+
+paths.each do |path, opinfo|
+  opinfo.each do |op, info|
+    info[:op] = op
+    insert_into = tags[nil][:paths]
+    if info[:tags] && !info[:tags].empty?
+      main_tag = info[:tags][0]
+      insert_into = tags[main_tag][:paths]
+    end
+    insert_into[path] ||= []
+    insert_into[path].push(info)
+  end
+end
+
+puts "= #{title ? title: "REST API Description"}"
+if email
+  if name
+    puts "#{name} <#{email}>"
+  else
+    puts email
+  end
+end
+puts "v#{version}" if version
+print ":toc: left\n" \
+     ":source-highlighter: coderay\n\n"
+
+print_description(description) if description
+
+if json[:security]
+  json[:security].each do |sec|
+    {
+      basic: "basic authentication",
+      bearerAuth: "bearer authentication"
+    }.each do |key,desc|
+      puts "* Access is supported through #{desc} (TBD)." if sec[key]
+    end
+  end
+  puts
+end
+
+tags.each do |id, info|
+  next if info[:paths].empty?
+  print "== #{id}\n\n"
+  print_description(info[:description])
+  info[:paths].each do |n,v|
+    warn v.size
+    v.each do |api|
+      print_api(n.to_s, api, components)
+    end
+  end
+  puts
+end
