@@ -2,9 +2,68 @@
 
 require 'json'
 require 'yaml'
+require 'nokogiri'
+
+def print_html_list(elems, depth)
+  elems.children.each do |elem|
+    stripped = elem.text.strip
+    case elem.name
+    when 'text'
+      next if stripped.empty?
+      print("\n#{'*' * depth} #{stripped}")
+    when 'ul'
+      print_html_list(elem.children, depth + 1)
+    when 'br'
+      print("\n\n")
+    else
+      warn "unsupported html element in list #{elem.name}: #{elem.text}"
+    end
+  end
+end
+
+def print_html_dlist(elems)
+  elems.children.each do |elem|
+    stripped = elem.text.strip
+    case elem.name
+    when 'text'
+      next if stripped.empty?
+      puts(stripped)
+    when 'b'
+      puts("#{stripped}::")
+    when 'br'
+      print(" +\n")
+    else
+      warn "Unsupported html element in dlist #{elem.name}: #{elem.text}"
+    end
+  end
+end
 
 def print_description(text)
-  print("#{text}#{text[-1].match(/[[:punct:]]/) ? '' : "."}\n\n")
+  if (m = text.match(/<\/\w+>/))
+    parsed = Nokogiri::HTML.fragment(text)
+    parsed.children.each do |elem|
+      case elem.name
+      when 'text'
+        print(elem.text.strip)
+      when 'br'
+        print("\n\n")
+      when 'h2'
+        print "\n\n== #{elem.text}\n\n"
+      when 'h3'
+        warn "\n\n=== #{elem.text}\n\n"
+      when 'ul'
+        print_html_list(elem.children, 1)
+      when 'pre'
+        puts "\n[source]\n----\n#{elem.text.strip}\n----\n\n"
+      when 'dl'
+        print_html_dlist(elem.children)
+      else
+        warn "Unsupported html element #{elem.type}: #{elem.text}"
+      end
+    end
+  else
+    print("#{text}#{text[-1].match(/[[:punct:]]/) ? '' : "."}\n\n")
+  end
 end
 
 def print_prop_table(properties, type, req)
@@ -45,9 +104,20 @@ def print_prop_table(properties, type, req)
   print "----\n\n"
 end
 
+def get_ref(components, refspec)
+  refspec.sub('#/components/', '').split('/').each do |name|
+    components = components[name.to_sym]
+    if !components
+      warn "Unknown component $ref \"#{refspec}\""
+      return {}
+    end
+  end
+  components
+end
+
 def print_props(schema, components)
   if (r = schema[:'$ref'])
-    schema = components[:schemas][r.sub('#/components/schemas/', '').to_sym]
+    schema = get_ref(components, r)
   end
   type = schema[:type]
   if schema[:items]
@@ -58,10 +128,11 @@ def print_props(schema, components)
   end
   #warn schema
   req = []
-  schema[:required].each { |r| req.push(r)} if schema[:required]
+  schema[:required].each { |r| req.push(r) } if schema[:required]
 
-  print_prop_table(schema[:properties], type, req) if schema[:properties]
-
+  if schema[:properties]
+    print_prop_table(schema[:properties], type, req)
+  end
   if schema[:additionalProperties]
     puts "Additional propererties with a value in" \
          " #{schema[:additionalProperties][:format]} format."
@@ -124,9 +195,13 @@ def print_api(path, info, components)
       print "==== Responses\n\n"
       resp.each do |code, r|
         puts "===== #{code}"
+
+        if (ref = r[:'$ref'])
+          r = get_ref(components, ref)
+        end
         print_description(r[:description]) if r[:description]
         schema =  r.dig(:content, :"application/json", :schema)
-        if schema #&& schema[:type]
+        if schema
           print "The return type is #{schema[:type]}, and the following" \
                 " parameters may be returned:\n\n"
           print_props(schema, components)
@@ -161,7 +236,7 @@ components = json[:components]
 raise 'Missing "info"/"title" field' if !title
 raise 'Missing "paths" field' if !paths
 
-tags = {nil => {description: "Default", paths: {}}}
+tags = {:default => {description: "Default", paths: {}}}
 if json[:tags]
   json[:tags].each do |tag|
     [:name, :description].each do |k|
@@ -176,9 +251,10 @@ end
 paths.each do |path, opinfo|
   opinfo.each do |op, info|
     info[:op] = op
-    insert_into = tags[nil][:paths]
+    insert_into = tags[:default][:paths]
     if info[:tags] && !info[:tags].empty?
       main_tag = info[:tags][0]
+      tags[main_tag] ||= {paths: {}}
       insert_into = tags[main_tag][:paths]
     end
     insert_into[path] ||= []
@@ -215,7 +291,7 @@ end
 tags.each do |id, info|
   next if info[:paths].empty?
   print "== #{id}\n\n"
-  print_description(info[:description])
+  print_description(info[:description]) if info[:description]
   info[:paths].each do |n,v|
     v.each { |api| print_api(n.to_s, api, components) }
   end
