@@ -58,12 +58,23 @@ def print_description(text)
       when 'dl'
         print_html_dlist(elem.children)
       else
-        warn "Unsupported html element #{elem.type}: #{elem.text}"
+        warn "Unsupported html element #{elem.name}: #{elem.text}"
       end
     end
   else
     print("#{text}#{text[-1].match(/[[:punct:]]/) ? '' : "."}\n\n")
   end
+end
+
+def print_example(example)
+  puts "Example"
+  if example.is_a?(Hash) || example.is_a?(Array)
+    puts "[source,json]\n----"
+    puts JSON.pretty_generate(example)
+  else
+    puts"----\n#{example}"
+  end
+  print "----\n\n"
 end
 
 def print_prop_table(properties, type, req)
@@ -90,18 +101,17 @@ def print_prop_table(properties, type, req)
     elsif props[:type]
       if props[:enum]
         example[name] = props[:enum].first
-      else
-        example[name] = props[:type]
+#      else
+#        example[name] = props[:type]
       end
     else
       example[name] = "string"
     end
   end
-  example = [example] if type == "array"
-  puts "Example\n" \
-       "[source,json]\n----"
-  puts JSON.pretty_generate(example)
-  print "----\n\n"
+  if !example.empty?
+    example = [example] if type == "array"
+    print_example(example)
+  end
 end
 
 def get_ref(components, refspec)
@@ -120,18 +130,20 @@ def print_props(schema, components)
     schema = get_ref(components, r)
   end
   type = schema[:type]
-  if schema[:items]
+  if schema[:items] && schema.dig(:items, :type) == "object"
     schema = schema[:items]
     if (r = schema[:'$ref'])
       schema = components[:schemas][r.sub('#/components/schemas/', '').to_sym]
     end
   end
-  #warn schema
   req = []
   schema[:required].each { |r| req.push(r) } if schema[:required]
 
   if schema[:properties]
     print_prop_table(schema[:properties], type, req)
+  end
+  if schema[:items]
+    print_prop_table({items: schema[:items]}, type, req)
   end
   if schema[:additionalProperties]
     puts "Additional propererties with a value in" \
@@ -200,11 +212,13 @@ def print_api(path, info, components)
           r = get_ref(components, ref)
         end
         print_description(r[:description]) if r[:description]
-        schema =  r.dig(:content, :"application/json", :schema)
-        if schema
-          print "The return type is #{schema[:type]}, and the following" \
+        if (schema = r.dig(:content, :"application/json", :schema))
+          print "The return type is __#{schema[:type]}__, and the following" \
                 " parameters may be returned:\n\n"
           print_props(schema, components)
+        end
+        if (example = r.dig(:content, :"application/json", :example))
+          print_example(example.is_a?(String) ? JSON.parse(example) : example)
         end
       end
       puts
@@ -276,13 +290,22 @@ print ":toc: left\n" \
 
 print_description(description) if description
 
-if json[:security]
-  json[:security].each do |sec|
-    {
-      basic: "basic authentication",
-      bearerAuth: "bearer authentication"
-    }.each do |key,desc|
-      puts "* Access is supported through #{desc} (TBD)." if sec[key]
+if (sec = json.dig(:components, :securitySchemes))
+  sec.each do |name, info|
+    desc = {
+      BasicAuth: "basic authentication",
+      BearerAuth: "bearer authentication",
+      ApiKeyAuth: "API keys",
+      OpenID: "OpenID",
+      OAuth2: "Oauth2"
+    }[name]
+    if desc
+      print "Access is supported through #{desc}.\n\n"
+      if !info.empty?
+        puts "[horizontal]"
+        info.each { |k,v| puts "#{k.capitalize}:: #{v}" }
+      end
+      break
     end
   end
   puts
