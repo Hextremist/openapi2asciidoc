@@ -162,7 +162,8 @@ def print_api(path, info, components)
 
   if info[:description]
     desc = info[:description]
-    desc.each_line { |l| puts l.strip }
+    offset = desc.match('^\s*')[0].size
+    desc.each_line { |l| puts l[offset..-1] }
     puts
 
     consume = info[:requestBody]
