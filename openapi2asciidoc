@@ -139,16 +139,22 @@ def print_props(schema, components)
   req = []
   schema[:required].each { |r| req.push(r) } if schema[:required]
 
+  have_props = false
   if schema[:properties]
     print_prop_table(schema[:properties], type, req)
+    have_props = true
   end
   if schema[:items]
     print_prop_table({items: schema[:items]}, type, req)
+    have_props = true
   end
   if schema[:additionalProperties]
     puts "Additional propererties with a value in" \
          " #{schema[:additionalProperties][:format]} format."
+    have_props = true
   end
+
+  print "No properties are specified\n\n" unless have_props
 end
 
 def print_api(path, info, components)
@@ -167,18 +173,24 @@ def print_api(path, info, components)
       consume[:content].each { |k,v| puts "* #{k}" }
       puts
 
-      schema = consume.dig(:content, :"application/json", :schema)
-      if schema && !schema.empty?
-        print "==== Request Body" \
-              " (#{consume[:required] ? 'required' : 'optional'})\n\n"
-        print_props(schema, components)
+      heading = "==== Request Body" \
+                " (#{consume[:required] ? 'required' : 'optional'})\n\n"
+      if consume.dig(:content, :"application/json")
+        heading_printed = false
+        schema = consume.dig(:content, :"application/json", :schema)
+        if (schema && !schema.empty?)
+          print heading
+          heading_printed = true
+          print_props(schema, components)
+        end
+        if (example = consume.dig(:content, :"application/json", :example))
+          print heading unless heading_printed
+          print_example(example.is_a?(String) ? JSON.parse(example) : example)
+        end
       elsif (example = consume.dig(:content, :"text/plain", :example))
         print "==== Request Body" \
               " (#{consume[:required] ? 'required' : 'optional'})\n\n"
-        print "Example\n\n" \
-              "----\n" \
-              "#{example}\n" \
-              "----\n\n"
+        print_example(example)
       end
     end
 
