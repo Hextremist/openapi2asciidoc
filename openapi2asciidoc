@@ -240,12 +240,14 @@ def print_api(path, info, components)
 end
 
 json = nil
-if ARGV[0].match(".ya?ml")
+if ARGV[0].match(".ya?ml$")
   keys2sym = ->(h) do
     h.transform_keys!(&:to_sym) if h.respond_to?(:transform_keys!)
     h.each { |v| keys2sym.call(v) } if h.respond_to?(:each)
   end
-  json = keys2sym.call(YAML.load_file(ARGV[0], permitted_classes: [Time]))
+  json = keys2sym.call(YAML.method(:safe_load).parameters.include?([:key, :permitted_classes]) \
+                       ? YAML.load_file(ARGV[0], permitted_classes: [Time]) \
+                       : YAML.load_file(ARGV[0]))
 else
   json = JSON.parse(File.read(ARGV[0]), symbolize_names: true)
 end
