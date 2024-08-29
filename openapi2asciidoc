@@ -308,22 +308,24 @@ print_description(description) if description
 if (sec = json.dig(:components, :securitySchemes))
   sec.each do |name, info|
     desc = {
-      BasicAuth: "basic authentication",
-      BearerAuth: "bearer authentication",
-      ApiKeyAuth: "API keys",
-      OpenID: "OpenID",
-      OAuth2: "Oauth2"
-    }[name]
-    if desc
-      print "Access is supported through #{desc}.\n\n"
+      basic: "basic authentication",
+      bearer: "bearer authentication",
+      apiKey: "API keys",
+      openID: "OpenID",
+      oauth2: "Oauth2",
+      mutualTLS: "mutual TLS"
+    }
+    found = desc[info[:scheme].to_sym]
+    found = desc[info[:type].to_sym] unless found
+    if found
+      print "Access is supported through #{found}.\n\n"
       if !info.empty?
         puts "[horizontal]"
         info.each { |k,v| puts "#{k.capitalize}:: #{v}" }
       end
-      break
+      print "\n\n"
     end
   end
-  puts
 end
 
 tags.each do |id, info|
