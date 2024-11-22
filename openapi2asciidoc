@@ -149,8 +149,12 @@ def print_props(schema, components)
     have_props = true
   end
   if schema[:additionalProperties]
-    puts "Additional propererties with a value in" \
-         " #{schema[:additionalProperties][:format]} format."
+    if (fmt = schema[:additionalProperties][:format])
+      puts "Additional properties with a value in #{fmt} format."
+    elsif (type = schema[:additionalProperties][:type])
+      puts "Additional properties of type __#{type}__:"
+      print_props(schema[:additionalProperties], components)
+    end
     have_props = true
   end
 
@@ -226,8 +230,11 @@ def print_api(path, info, components)
         end
         print_description(r[:description]) if r[:description]
         if (schema = r.dig(:content, :"application/json", :schema))
-          print "The return type is __#{schema[:type]}__, and the following" \
-                " parameters may be returned:\n\n"
+          print "The return type is __#{schema[:type]}__. "
+          print_description(schema[:description]) if schema[:description]
+          if schema[:properties]
+            print "The following parameters may be returned:\n\n"
+          end
           print_props(schema, components)
         end
         if (example = r.dig(:content, :"application/json", :example))
