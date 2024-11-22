@@ -3,6 +3,7 @@
 require 'json'
 require 'yaml'
 require 'nokogiri'
+require 'optparse'
 
 def print_html_list(elems, depth)
   elems.children.each do |elem|
@@ -246,101 +247,158 @@ def print_api(path, info, components)
   end
 end
 
-json = nil
-if ARGV[0].match(".ya?ml$")
-  keys2sym = ->(h) do
-    h.transform_keys!(&:to_sym) if h.respond_to?(:transform_keys!)
-    h.each { |v| keys2sym.call(v) } if h.respond_to?(:each)
-  end
-  json = keys2sym.call(YAML.method(:safe_load).parameters.include?([:key, :permitted_classes]) \
-                       ? YAML.load_file(ARGV[0], permitted_classes: [Time]) \
-                       : YAML.load_file(ARGV[0]))
-else
-  json = JSON.parse(File.read(ARGV[0]), symbolize_names: true)
-end
-
-info = json[:info]
-raise 'Missing "info" field' if !info
-
-title = info[:title]
-name = info.dig(:contact, :name)
-email = info.dig(:contact, :email)
-description = info[:description]
-version = info[:version]
-paths = json[:paths]
-components = json[:components]
-raise 'Missing "info"/"title" field' if !title
-raise 'Missing "paths" field' if !paths
-
-tags = {:default => {description: "Default", paths: {}}}
-if json[:tags]
-  json[:tags].each do |tag|
-    [:name, :description].each do |k|
-      raise 'Missing #{k} in "tags"' if !tag[k]
+def convert(filepath, opts)
+  json = nil
+  if filepath.match(".ya?ml$")
+    keys2sym = ->(h) do
+      h.transform_keys!(&:to_sym) if h.respond_to?(:transform_keys!)
+      h.each { |v| keys2sym.call(v) } if h.respond_to?(:each)
     end
-    n = tag.delete(:name)
-    tag[:paths] = {}
-    tags[n] = tag
-  end
-end
-
-paths.each do |path, opinfo|
-  opinfo.each do |op, info|
-    info[:op] = op
-    insert_into = tags[:default][:paths]
-    if info[:tags] && !info[:tags].empty?
-      main_tag = info[:tags][0]
-      tags[main_tag] ||= {paths: {}}
-      insert_into = tags[main_tag][:paths]
-    end
-    insert_into[path] ||= []
-    insert_into[path].push(info)
-  end
-end
-
-puts "= #{title ? title: "REST API Description"}"
-if email
-  if name
-    puts "#{name} <#{email}>"
+    json = keys2sym.call(YAML.method(:safe_load).parameters
+                           .include?([:key, :permitted_classes]) \
+                         ? YAML.load_file(ARGV[0], permitted_classes: [Time]) \
+                         : YAML.load_file(ARGV[0]))
+  elsif filepath.match(".json$")
+    json = JSON.parse(File.read(ARGV[0]), symbolize_names: true)
   else
-    puts email
+    raise "Only filenames with a .y(a)ml or .json extension are supported"
   end
-end
-puts "v#{version}" if version
-print ":toc: left\n" \
-     ":source-highlighter: coderay\n\n"
 
-print_description(description) if description
+  intro = opts[:intro_file] ? File.read(opts[:intro_file]) : nil
 
-if (sec = json.dig(:components, :securitySchemes))
-  sec.each do |name, info|
-    desc = {
-      basic: "basic authentication",
-      bearer: "bearer authentication",
-      apiKey: "API keys",
-      openID: "OpenID",
-      oauth2: "Oauth2",
-      mutualTLS: "mutual TLS"
-    }
-    found = desc[info[:scheme].to_sym]
-    found = desc[info[:type].to_sym] unless found
-    if found
-      print "Access is supported through #{found}.\n\n"
-      if !info.empty?
-        puts "[horizontal]"
-        info.each { |k,v| puts "#{k.capitalize}:: #{v}" }
+  info = json[:info]
+  raise 'Missing "info" field' if !info
+
+  title = info[:title]
+  name = info.dig(:contact, :name)
+  email = info.dig(:contact, :email)
+  description = info[:description]
+  version = info[:version]
+  paths = json[:paths]
+  components = json[:components]
+  raise 'Missing "info"/"title" field' if !title
+  raise 'Missing "paths" field' if !paths
+
+  tags = {:default => {description: "Default", paths: {}}}
+  if json[:tags]
+    json[:tags].each do |tag|
+      [:name, :description].each do |k|
+        raise 'Missing #{k} in "tags"' if !tag[k]
       end
-      print "\n\n"
+      n = tag.delete(:name)
+      tag[:paths] = {}
+      tags[n] = tag
     end
   end
+
+  paths.each do |path, opinfo|
+    opinfo.each do |op, info|
+      info[:op] = op
+      insert_into = tags[:default][:paths]
+      if info[:tags] && !info[:tags].empty?
+        main_tag = info[:tags][0]
+        tags[main_tag] ||= {paths: {}}
+        insert_into = tags[main_tag][:paths]
+      end
+      insert_into[path] ||= []
+      insert_into[path].push(info)
+    end
+  end
+
+  unless opts[:no_header]
+    puts "= #{title ? title: "REST API Description"}"
+    if email
+      if name
+        puts "#{name} <#{email}>"
+      else
+        puts email
+      end
+    end
+    puts "v#{version}" if version
+    opts[:attr].each do |n,v|
+      if v
+        puts ":#{n}: #{v}"
+      else
+        puts ":#{n}:"
+      end
+    end
+    puts
+  end
+
+  print("#{intro}\n\n") if intro
+
+  print_description(description) if description
+
+  if (sec = json.dig(:components, :securitySchemes))
+    sec.each do |name, info|
+      desc = {
+        basic: "basic authentication",
+        bearer: "bearer authentication",
+        apiKey: "API keys",
+        openID: "OpenID",
+        oauth2: "Oauth2",
+        mutualTLS: "mutual TLS"
+      }
+      found = desc[info[:scheme].to_sym]
+      found = desc[info[:type].to_sym] unless found
+      if found
+        print "Access is supported through #{found}.\n\n"
+        if !info.empty?
+          puts "[horizontal]"
+          info.each { |k,v| puts "#{k.capitalize}:: #{v}" }
+        end
+        print "\n\n"
+      end
+    end
+  end
+
+  tags.each do |id, info|
+    next if info[:paths].empty?
+    print "== #{id}\n\n"
+    print_description(info[:description]) if info[:description]
+    info[:paths].each do |n,v|
+      v.each { |api| print_api(n.to_s, api, components) }
+    end
+    puts
+  end
 end
 
-tags.each do |id, info|
-  next if info[:paths].empty?
-  print "== #{id}\n\n"
-  print_description(info[:description]) if info[:description]
-  info[:paths].each do |n,v|
-    v.each { |api| print_api(n.to_s, api, components) }
+begin
+  options = {
+    attr: {
+      "toc" => "left",
+      "source-highlighter" => "coderay"
+    }
+  }
+  op = OptionParser.new do |opts|
+    opts.banner = "Usage: #{File.basename($0)} [options] input.<yaml|json>"
+    opts.on("-a", "--attribute name[=value]", "Set asciidoc attribute") do |a|
+      (n,v) = a.split('=')
+      if v
+        options[:attr][n] = v
+      elsif a.start_with("!")
+        options[:attr].erase(a[1,a.size])
+      else
+        options[:attr][a] = nil
+      end
+    end
+    opts.on("--no-header", "Do not output a document header") do
+      options[:no_header] = true
+    end
+    opts.on("-i", "--intro-file FILEPATH",
+            "File containing Asciidoc text to include",
+            "at the top of the document") do |fn|
+      options[:intro_file] = fn
+    end
   end
-  puts
+  begin
+    op.parse!
+    raise "Missing name of input file" if ARGV.size != 1
+  rescue => e
+    raise op.to_s + e.message
+  end
+  convert(ARGV[0], options)
+rescue => e
+  warn e
+  exit 1
 end
